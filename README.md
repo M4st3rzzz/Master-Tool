@@ -1,16 +1,13 @@
 # Master Tools - Features Guide
 
+***To install, simply extract the "master.dll" file to "SPT\BepInEx\plugins"***
 
 ⌨️ Controls
 
 •
 INSERT: Open/Close the Mod Menu.
 
-•
-F7: Toggle GodMode (Quick Action).
-
-•
-F8: Toggle Player ESP (Quick Action).
+• NumpadKeys
 
 
 
@@ -40,7 +37,7 @@ Unlock All Doors: A powerful utility that instantly unlocks every locked door an
 Visualizes all players and bots through walls with the following features:
 
 •
-Faction Identification: Different colors for BEAR, USEC, and Savages (Scavs/Bosses/Raiders).
+Faction Identification: Different colors for BEAR, USEC, Bosses and Savages (Scavs/Raiders).
 
 •
 Distance Tracking: Shows the exact distance in meters to each target.
@@ -83,12 +80,10 @@ Update Rate (FPS): Independent refresh rate control for loot visuals.
 
 ⚙️ Technical Details
 
+• Optimization: 
 
-•
-Compatibility: Designed for modern SPT versions (3.10+).
+  - Features a container caching system that refreshes every 10 seconds to maintain high frame rates. 
 
-•
-Optimization: Features a container caching system that refreshes every 10 seconds to maintain high frame rates.
+  - Culling provides a small performance boost by disabling meshes at distance. ⚠️ However, this may cause bots to appear instantly once they enter the configured range. 
 
-•
-Config file on -> "SPT\BepInEx\config\com.master.tools.cfg"
+• Config file on -> "SPT\BepInEx\config\com.master.tools.cfg"
