@@ -14,7 +14,7 @@ using UnityEngine;
 
 namespace InfiniteHealthToggle
 {
-    [BepInPlugin("com.master.tools", "Advanced SPT Mod Menu", "1.8.2")]
+    [BepInPlugin("com.master.tools", "Advanced SPT Mod Menu", "1.9.0")]
     public sealed class InfiniteHealthTogglePlugin : BaseUnityPlugin
     {
         internal static InfiniteHealthTogglePlugin Instance;
@@ -49,6 +49,14 @@ namespace InfiniteHealthToggle
         internal static ConfigEntry<Color> ColorUsec;
         internal static ConfigEntry<Color> ColorSavage;
         internal static ConfigEntry<Color> ColorBoss;
+
+        internal static ConfigEntry<bool> ChamsEnabled;
+        internal static ConfigEntry<float> ChamsIntensity;
+        internal static ConfigEntry<KeyboardShortcut> ToggleChamsHotkey;
+        private static Shader _chamsShader;
+        private static Dictionary<Renderer, Shader> _originalShaders = new Dictionary<Renderer, Shader>();
+
+
 
         // --- Item & Container ESP Settings ---
         internal static ConfigEntry<bool> ItemEspEnabled;
@@ -141,6 +149,11 @@ namespace InfiniteHealthToggle
             ColorSavage = Config.Bind("ESP Players", "Color Savage", Color.yellow, "Color for Scavs/Bots.");
             ColorBoss = Config.Bind("ESP Players", "Color Boss", new Color(0.5f, 0f, 0.5f), "Color for Bosses.");
 
+            ChamsEnabled = Config.Bind("ESP Players", "Chams Enabled", false, "Enable colored models.");
+            ChamsIntensity = Config.Bind("ESP Players", "Chams Intensity", 0.5f, "Brightness of Chams colors (0.1 to 1.0).");
+            ToggleChamsHotkey = Config.Bind("Hotkeys", "13. Toggle Chams", new KeyboardShortcut(KeyCode.K), "Hotkey to toggle Chams.");
+            _chamsShader = Shader.Find("Hidden/Internal-Colored");
+
             // Item & Container ESP Binds
             ItemEspEnabled = Config.Bind("ESP Items", "Enabled", false, "Show loose loot.");
             ContainerEspEnabled = Config.Bind("ESP Containers", "Enabled", false, "Show items inside containers.");
@@ -172,6 +185,7 @@ namespace InfiniteHealthToggle
         private void Update()
         {
             // Hotkey Handling
+            if (ToggleChamsHotkey.Value.IsDown()) ChamsEnabled.Value = !ChamsEnabled.Value;
             if (ToggleUiHotkey.Value.IsDown()) _showUi = !_showUi;
             if (ToggleStatusHotkey.Value.IsDown()) StatusWindowEnabled.Value = !StatusWindowEnabled.Value;
             if (ToggleWeaponInfoHotkey.Value.IsDown()) ShowWeaponInfo.Value = !ShowWeaponInfo.Value;
@@ -199,10 +213,13 @@ namespace InfiniteHealthToggle
             // ESP Update Logic
             if (EspEnabled.Value && _localPlayer != null && Time.time >= _nextEspUpdate)
             {
-                UpdateEspTargets();
+                UpdateEsp();
                 _nextEspUpdate = Time.time + EspUpdateInterval.Value;
             }
 
+            //Chams with 60fps
+            UpdateChams();
+            
             if ((ItemEspEnabled.Value || ContainerEspEnabled.Value) && _localPlayer != null && Time.time >= _nextItemEspUpdate)
             {
                 UpdateItemAndContainerEsp();
@@ -341,40 +358,76 @@ namespace InfiniteHealthToggle
         }
 
 
-        private void UpdateEspTargets()
+        private void UpdateEsp()
         {
-            _espTargets.Clear();
-            if (_gameWorld == null || _mainCamera == null) return;
+            if (_gameWorld == null || _mainCamera == null || !EspEnabled.Value)
+            {
+                _espTargets.Clear();
+                return;
+            }
+
             var players = _gameWorld.RegisteredPlayers;
             if (players == null) return;
+
+            _espTargets.Clear();
+
             foreach (var player in players)
             {
-                if (player == null || player.IsYourPlayer || !player.HealthController.IsAlive) continue;
-                Vector3 targetPos = player.Transform.position;
-                float dist = Vector3.Distance(_localPlayer.Transform.position, targetPos);
-                if (dist > EspMaxDistance.Value) continue;
-                Vector3 screenPos = _mainCamera.WorldToScreenPoint(targetPos);
-                if (screenPos.z > 0)
+                if (player is Player playerClass)
                 {
-                    screenPos.y = Screen.height - screenPos.y;
-                    string side = player.Profile?.Side.ToString() ?? "Unknown";
-                    string name = player.Profile?.Info?.Nickname ?? "Bot";
+                    if (playerClass.IsYourPlayer || !playerClass.HealthController.IsAlive) continue;
 
-                    bool isBoss = false;
-                    if (player.Profile?.Info?.Settings?.Role != null)
+                    float dist = Vector3.Distance(_mainCamera.transform.position, playerClass.Transform.position);
+                    if (dist > EspMaxDistance.Value) continue;
+
+                    Color textColor = GetPlayerColor(playerClass);
+                    textColor.a = 1.0f; // Garante que o texto seja sempre visível
+
+                    Vector3 screenPos = _mainCamera.WorldToScreenPoint(playerClass.Transform.position + Vector3.up * 1.8f);
+                    if (screenPos.z > 0)
                     {
-                        var role = player.Profile.Info.Settings.Role;
-                        isBoss = role.ToString().ToLower().Contains("boss") || role.ToString().ToLower().Contains("follower");
+                        _espTargets.Add(new EspTarget
+                        {
+                            ScreenPosition = new Vector2(screenPos.x, Screen.height - screenPos.y),
+                            Distance = dist,
+                            Nickname = playerClass.Profile.Nickname,
+                            Side = playerClass.Side.ToString(),
+                            Color = textColor
+                        });
                     }
+                }
+            }
+        }
 
-                    _espTargets.Add(new EspTarget
+        private void UpdateChams()
+        {
+            if (_gameWorld == null || _mainCamera == null) return;
+
+            var players = _gameWorld.RegisteredPlayers;
+            if (players == null) return;
+
+            foreach (var player in players)
+            {
+                if (player is Player playerClass)
+                {
+                  
+                    float dist = Vector3.Distance(_mainCamera.transform.position, playerClass.Transform.position);
+
+                    bool shouldChams = ChamsEnabled.Value &&
+                                       !playerClass.IsYourPlayer &&
+                                       playerClass.HealthController.IsAlive &&
+                                       dist <= EspMaxDistance.Value;
+
+                    if (shouldChams)
                     {
-                        ScreenPosition = screenPos,
-                        Distance = dist,
-                        Nickname = name,
-                        Side = isBoss ? "BOSS" : side,
-                        Color = isBoss ? ColorBoss.Value : GetColorForSide(side)
-                    });
+                        Color color = GetPlayerColor(playerClass);
+                        ApplyChams(playerClass, color);
+                    }
+                    else
+                    {
+                        
+                        ResetChams(playerClass);
+                    }
                 }
             }
         }
@@ -514,18 +567,25 @@ namespace InfiniteHealthToggle
 
             GUILayout.Space(10);
             GUILayout.Label("<b>--- PLAYER ESP ---</b>");
-            EspEnabled.Value = GUILayout.Toggle(EspEnabled.Value, $" Enable Player ESP [{ToggleEspHotkey.Value}]");
+            EspEnabled.Value = GUILayout.Toggle(EspEnabled.Value, $" Enable Player ESP (Text) [{ToggleEspHotkey.Value}]");
             GUILayout.Label($"Max Distance: {EspMaxDistance.Value:F0}m");
             EspMaxDistance.Value = GUILayout.HorizontalSlider(EspMaxDistance.Value, 50f, 1000f);
             GUILayout.Label($"Update Rate (FPS): {1f / EspUpdateInterval.Value:F0}");
             float pFps = GUILayout.HorizontalSlider(1f / EspUpdateInterval.Value, 1f, 60f);
             EspUpdateInterval.Value = 1f / pFps;
 
+            GUILayout.Label("<b>--- CHAMS SETTINGS ---</b>");
+            ChamsEnabled.Value = GUILayout.Toggle(ChamsEnabled.Value, $" Enable Player Chams (Models) [{ToggleChamsHotkey.Value}]");
+            GUILayout.BeginHorizontal();
+            GUILayout.EndHorizontal();
+
             GUILayout.Space(5);
+            GUILayout.Label("<b>--- COLORS & TRANSPARENCY (RGB) ---</b>");
             ColorBear.Value = DrawColorPicker("BEAR", ColorBear.Value);
             ColorUsec.Value = DrawColorPicker("USEC", ColorUsec.Value);
-            ColorSavage.Value = DrawColorPicker("Savage", ColorSavage.Value);
+            ColorSavage.Value = DrawColorPicker("SAVAGE / SCAV", ColorSavage.Value);
             ColorBoss.Value = DrawColorPicker("BOSS", ColorBoss.Value);
+
 
             GUILayout.Space(10);
             GUILayout.Label("<b>--- ITEM & CONTAINER ESP ---</b>");
@@ -572,14 +632,25 @@ namespace InfiniteHealthToggle
 
         private Color DrawColorPicker(string label, Color color)
         {
+            GUILayout.BeginVertical(GUI.skin.box);
+            GUILayout.Label($"<b>{label}</b>");
             GUILayout.BeginHorizontal();
-            GUILayout.Label(label, GUILayout.Width(60));
-            float r = GUILayout.HorizontalSlider(color.r, 0f, 1f, GUILayout.Width(50));
-            float g = GUILayout.HorizontalSlider(color.g, 0f, 1f, GUILayout.Width(50));
-            float b = GUILayout.HorizontalSlider(color.b, 0f, 1f, GUILayout.Width(50));
+
+            GUILayout.Label("R", GUILayout.Width(15));
+            float r = GUILayout.HorizontalSlider(color.r, 0f, 1f, GUILayout.Width(60));
+
+            GUILayout.Label("G", GUILayout.Width(15));
+            float g = GUILayout.HorizontalSlider(color.g, 0f, 1f, GUILayout.Width(60));
+
+            GUILayout.Label("B", GUILayout.Width(15));
+            float b = GUILayout.HorizontalSlider(color.b, 0f, 1f, GUILayout.Width(60));
+
             GUILayout.EndHorizontal();
+            GUILayout.EndVertical();
+
             return new Color(r, g, b, 1f);
         }
+
 
         private void RefreshLocalReferences()
         {
@@ -617,6 +688,56 @@ namespace InfiniteHealthToggle
             }
             return true;
         }
+
+        private void ApplyChams(Player player, Color color)
+        {
+            if (player == null) return;
+            foreach (var renderer in player.GetComponentsInChildren<SkinnedMeshRenderer>())
+            {
+                if (renderer == null || renderer.material == null) continue;
+
+                if (renderer.material.shader != _chamsShader)
+                {
+                    if (!_originalShaders.ContainsKey(renderer))
+                        _originalShaders[renderer] = renderer.material.shader;
+
+                    renderer.material.shader = _chamsShader;
+                    renderer.material.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
+                    renderer.material.SetInt("_ZWrite", 0);
+                }
+                
+                renderer.material.SetColor("_Color", color);
+            }
+        }
+
+
+
+        private void ResetChams(Player player)
+        {
+            if (player == null) return;
+            foreach (var renderer in player.GetComponentsInChildren<SkinnedMeshRenderer>())
+            {
+                if (renderer != null && renderer.material != null && _originalShaders.ContainsKey(renderer))
+                {
+                    renderer.material.shader = _originalShaders[renderer];
+                    _originalShaders.Remove(renderer);
+                }
+            }
+        }
+
+        private Color GetPlayerColor(Player player)
+        {
+            
+            if (player.Profile.Info.Settings.IsBoss()) return ColorBoss.Value;
+
+            
+            if (player.Side == EPlayerSide.Bear) return ColorBear.Value;
+            if (player.Side == EPlayerSide.Usec) return ColorUsec.Value;
+
+            
+            return ColorSavage.Value;
+        }
+
 
         private class EspTarget
         {
