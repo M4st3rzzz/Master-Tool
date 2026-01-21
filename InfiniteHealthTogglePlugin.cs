@@ -1,5 +1,6 @@
 using BepInEx;
 using BepInEx.Configuration;
+using BSG.CameraEffects;
 using Comfort.Common;
 using EFT;
 using EFT.HealthSystem;
@@ -14,7 +15,7 @@ using UnityEngine;
 
 namespace InfiniteHealthToggle
 {
-    [BepInPlugin("com.master.tools", "Advanced SPT Mod Menu", "1.9.0")]
+    [BepInPlugin("com.master.tools", "Advanced SPT Mod Menu", "2.0.0")]
     public sealed class InfiniteHealthTogglePlugin : BaseUnityPlugin
     {
         internal static InfiniteHealthTogglePlugin Instance;
@@ -45,17 +46,26 @@ namespace InfiniteHealthToggle
         internal static ConfigEntry<bool> EspEnabled;
         internal static ConfigEntry<float> EspUpdateInterval;
         internal static ConfigEntry<float> EspMaxDistance;
+        internal static ConfigEntry<float> EspTextAlpha;
+        internal static ConfigEntry<int> EspFontSize;
         internal static ConfigEntry<Color> ColorBear;
         internal static ConfigEntry<Color> ColorUsec;
         internal static ConfigEntry<Color> ColorSavage;
         internal static ConfigEntry<Color> ColorBoss;
-
         internal static ConfigEntry<bool> ChamsEnabled;
         internal static ConfigEntry<float> ChamsIntensity;
         internal static ConfigEntry<KeyboardShortcut> ToggleChamsHotkey;
         private static Shader _chamsShader;
         private static Dictionary<Renderer, Shader> _originalShaders = new Dictionary<Renderer, Shader>();
 
+        // Movement
+        internal static ConfigEntry<bool> SpeedhackEnabled;
+        internal static ConfigEntry<float> SpeedMultiplier;
+        // Visual
+        internal static ConfigEntry<bool> ThermalVisionEnabled;
+        internal static ConfigEntry<bool> NightVisionEnabled;
+        internal static ConfigEntry<bool> BigHeadModeEnabled;
+        internal static ConfigEntry<float> HeadSizeMultiplier;
 
 
         // --- Item & Container ESP Settings ---
@@ -66,10 +76,18 @@ namespace InfiniteHealthToggle
         internal static ConfigEntry<float> ItemEspUpdateInterval;
         internal static ConfigEntry<Color> ColorItem;
         internal static ConfigEntry<Color> ColorContainer;
+        private GUIStyle _itemEspLabelStyle;
+        private bool _itemEspStyleInitialized;
+        internal static ConfigEntry<int> ItemEspFontSize;
+
 
         // --- Performance Settings ---
         internal static ConfigEntry<bool> PerformanceMode;
         internal static ConfigEntry<float> BotRenderDistance;
+
+        // --- GUI Settings ---
+        private int _selectedTab = 0;
+        private readonly string[] _tabNames = { "Geral", "ESP Players", "ESP Itens", "Visual", "Troll", "Configs" };
 
         private Harmony _harmony;
 
@@ -110,8 +128,7 @@ namespace InfiniteHealthToggle
         // --- Optimization Cache ---
         private LootableContainer[] _cachedContainers;
         private float _nextContainerCacheRefresh;
-        private const float ContainerCacheInterval = 10.0f;
-
+        private const float ContainerCacheInterval = 300.0f;
         private void Awake()
         {
             Instance = this;
@@ -140,8 +157,18 @@ namespace InfiniteHealthToggle
             ToggleCullingHotkey = Config.Bind("Hotkeys", "10. Toggle Culling", new KeyboardShortcut(KeyCode.Keypad8), hotkeyDesc);
             ToggleUnlockDoorsHotkey = Config.Bind("Hotkeys", "11. Unlock All Doors", new KeyboardShortcut(KeyCode.Keypad9), hotkeyDesc);
 
+            // New features for 2.0.0
+            SpeedhackEnabled = Config.Bind("Movement", "Speedhack", false, "Move faster.");
+            SpeedMultiplier = Config.Bind("Movement", "Speed Multiplier", 2f, "Speed multiplier.");
+            ThermalVisionEnabled = Config.Bind("Visuals", "Thermal Vision", false, "Thermal vision.");
+            NightVisionEnabled = Config.Bind("Visuals", "Night Vision", false, "Toggle Night Vision.");
+            BigHeadModeEnabled = Config.Bind("Visuals", "Big Head Mode", false, "Enlarge enemy heads.");
+            HeadSizeMultiplier = Config.Bind("Visuals", "Head Size", 3f, "How big the heads should be.");
+
             // Player ESP Binds
             EspEnabled = Config.Bind("ESP Players", "Enabled", false, "Show players/bots.");
+            EspTextAlpha = Config.Bind("ESP Players", "Text Alpha", 1.0f, "Text Alpha.");
+            EspFontSize = Config.Bind("ESP Players", "Font Size", 12, "Text Size.");
             EspUpdateInterval = Config.Bind("ESP Players", "Update Interval", 0.05f, "Update rate for player ESP.");
             EspMaxDistance = Config.Bind("ESP Players", "Max Distance", 400f, "Max distance for players.");
             ColorBear = Config.Bind("ESP Players", "Color BEAR", Color.red, "Color for BEAR faction.");
@@ -162,6 +189,8 @@ namespace InfiniteHealthToggle
             ItemEspUpdateInterval = Config.Bind("ESP Items", "Update Interval", 0.5f, "Update rate for item ESP.");
             ColorItem = Config.Bind("ESP Items", "Color", Color.green, "Color for loose items.");
             ColorContainer = Config.Bind("ESP Containers", "Color", new Color(1f, 0.5f, 0f), "Color for container items.");
+            ItemEspFontSize = Config.Bind("ESP Items", "Font Size", 10, "Itens Text Size.");
+
 
             // Performance Binds
             PerformanceMode = Config.Bind("Performance", "Enable Distance Culling", true, "Only render bots within distance.");
@@ -224,6 +253,56 @@ namespace InfiniteHealthToggle
             {
                 UpdateItemAndContainerEsp();
                 _nextItemEspUpdate = Time.time + ItemEspUpdateInterval.Value;
+            }
+
+            if (SpeedhackEnabled.Value && _localPlayer != null)
+            {
+                Vector3 moveDir = _localPlayer.Transform.rotation * new Vector3(_localPlayer.MovementContext.MovementDirection.x, 0, _localPlayer.MovementContext.MovementDirection.y);
+                _localPlayer.Transform.position += moveDir * (SpeedMultiplier.Value * Time.deltaTime * 5f);
+            }
+
+
+            // Thermal Vision
+            if (_mainCamera != null)
+            {
+                var thermal = _mainCamera.GetComponent<ThermalVision>();
+                if (thermal != null && thermal.On != ThermalVisionEnabled.Value)
+                {
+                    thermal.On = ThermalVisionEnabled.Value;
+                }
+            }
+
+            if (_localPlayer != null)
+            {
+                if (_localPlayer == null || _localPlayer.HandsController == null) return;
+                var weapon = _localPlayer.HandsController.Item as Weapon;
+                if (weapon == null) return;
+
+                // --- Night Vision ---
+                if (_mainCamera != null)
+                {
+                    var nv = _mainCamera.GetComponent<NightVision>();
+                    if (nv != null && nv.On != NightVisionEnabled.Value)
+                    {
+                        nv.On = NightVisionEnabled.Value;
+                    }
+                }
+
+                if (_gameWorld == null) return;
+                foreach (var player in _gameWorld.RegisteredPlayers)
+                {
+                    if (player == null || player.IsYourPlayer) continue;
+                    var head = player.PlayerBones.Head.Original;
+                    if (head != null)
+                    {
+                       
+                        if (BigHeadModeEnabled.Value && player.HealthController.IsAlive)
+                            head.localScale = new Vector3(HeadSizeMultiplier.Value, HeadSizeMultiplier.Value, HeadSizeMultiplier.Value);
+                        else
+                            head.localScale = Vector3.one;
+                    }
+                }
+
             }
         }
 
@@ -296,6 +375,16 @@ namespace InfiniteHealthToggle
             if (!_espStyleInitialized) InitializeEspStyle();
             if (!_statusStyleInitialized) InitializeStatusStyle();
 
+            if (!_itemEspStyleInitialized)
+            {
+                _itemEspLabelStyle = new GUIStyle(_espLabelStyle);
+                _itemEspStyleInitialized = true;
+            }
+
+            
+            _espLabelStyle.fontSize = EspFontSize.Value;
+            _itemEspLabelStyle.fontSize = ItemEspFontSize.Value;
+
             if (_localPlayer != null && _mainCamera != null)
             {
                 if (EspEnabled.Value) RenderEsp();
@@ -307,10 +396,11 @@ namespace InfiniteHealthToggle
                 _windowRect = GUI.Window(WindowId, _windowRect, DrawWindow, "Advanced SPT Mod Menu");
         }
 
+
         private void InitializeEspStyle()
         {
             _espLabelStyle = new GUIStyle(GUI.skin.label);
-            _espLabelStyle.fontSize = 12;
+            _espLabelStyle.fontSize = EspFontSize.Value;
             _espLabelStyle.fontStyle = FontStyle.Bold;
             _espLabelStyle.alignment = TextAnchor.MiddleCenter;
             _espStyleInitialized = true;
@@ -381,7 +471,7 @@ namespace InfiniteHealthToggle
                     if (dist > EspMaxDistance.Value) continue;
 
                     Color textColor = GetPlayerColor(playerClass);
-                    textColor.a = 1.0f; // Garante que o texto seja sempre visível
+                    textColor.a = EspTextAlpha.Value;
 
                     Vector3 screenPos = _mainCamera.WorldToScreenPoint(playerClass.Transform.position + Vector3.up * 1.8f);
                     if (screenPos.z > 0)
@@ -530,7 +620,7 @@ namespace InfiniteHealthToggle
             foreach (var target in _itemEspTargets)
             {
                 string text = $"{target.Name}\n{target.Distance:F1}m";
-                DrawTextWithShadow(target.ScreenPosition, text, target.Color);
+                DrawTextWithShadowItens(target.ScreenPosition, text, target.Color, _itemEspLabelStyle);
             }
         }
 
@@ -544,74 +634,132 @@ namespace InfiniteHealthToggle
             GUI.Label(rect, text, _espLabelStyle);
         }
 
+        private void DrawTextWithShadowItens(Vector2 pos, string text, Color color, GUIStyle style)
+        {
+            Vector2 size = style.CalcSize(new GUIContent(text));
+            Rect rect = new Rect(pos.x - size.x / 2, pos.y - size.y / 2, size.x, size.y);
+
+            style.normal.textColor = Color.black;
+            GUI.Label(new Rect(rect.x + 1, rect.y + 1, rect.width, rect.height), text, style);
+
+            style.normal.textColor = color;
+            GUI.Label(rect, text, style);
+        }
+
         private void DrawWindow(int id)
         {
+            _selectedTab = GUILayout.Toolbar(_selectedTab, _tabNames);
+            GUILayout.Space(10);
+
             GUI.DragWindow(new Rect(0, 0, _windowRect.width, DragBarHeight));
             GUILayout.BeginArea(new Rect(10, DragBarHeight + 5, _windowRect.width - 20, _windowRect.height - DragBarHeight - 20));
             _mainScroll = GUILayout.BeginScrollView(_mainScroll);
+            switch (_selectedTab)
+            {
+                case 0:
+                    GUILayout.Space(20);
+                    // --- General Section ---
+                    GUILayout.Label("<b>--- GENERAL CHEATS ---</b>");
+                    GodModeEnabled.Value = GUILayout.Toggle(GodModeEnabled.Value, $" GodMode [{ToggleGodModeHotkey.Value}]");
+                    InfiniteStaminaEnabled.Value = GUILayout.Toggle(InfiniteStaminaEnabled.Value, $" Infinite Stamina [{ToggleStaminaHotkey.Value}]");
+                    NoWeightEnabled.Value = GUILayout.Toggle(NoWeightEnabled.Value, $" No Weight Penalties [{ToggleWeightHotkey.Value}]");
+                    StatusWindowEnabled.Value = GUILayout.Toggle(StatusWindowEnabled.Value, $" Show Status Window [{ToggleStatusHotkey.Value}]");
+                    ShowWeaponInfo.Value = GUILayout.Toggle(ShowWeaponInfo.Value, $" Show Weapon Info in Status [{ToggleWeaponInfoHotkey.Value}]");
+                    if (GUILayout.Button($"Unlock All Doors in Raid [{ToggleUnlockDoorsHotkey.Value}]")) UnlockAllDoors();
 
-            // --- General Section ---
-            GUILayout.Label("<b>--- GENERAL CHEATS ---</b>");
-            GodModeEnabled.Value = GUILayout.Toggle(GodModeEnabled.Value, $" GodMode [{ToggleGodModeHotkey.Value}]");
-            InfiniteStaminaEnabled.Value = GUILayout.Toggle(InfiniteStaminaEnabled.Value, $" Infinite Stamina [{ToggleStaminaHotkey.Value}]");
-            NoWeightEnabled.Value = GUILayout.Toggle(NoWeightEnabled.Value, $" No Weight Penalties [{ToggleWeightHotkey.Value}]");
-            StatusWindowEnabled.Value = GUILayout.Toggle(StatusWindowEnabled.Value, $" Show Status Window [{ToggleStatusHotkey.Value}]");
-            ShowWeaponInfo.Value = GUILayout.Toggle(ShowWeaponInfo.Value, $" Show Weapon Info in Status [{ToggleWeaponInfoHotkey.Value}]");
-            if (GUILayout.Button($"Unlock All Doors in Raid [{ToggleUnlockDoorsHotkey.Value}]")) UnlockAllDoors();
+                    GUILayout.Space(10);
+                    GUILayout.Label("<b>--- PERFORMANCE ---</b>");
+                    PerformanceMode.Value = GUILayout.Toggle(PerformanceMode.Value, $" Enable Bot Distance Culling [{ToggleCullingHotkey.Value}]");
+                    GUILayout.Label($"Bot Render Distance: {BotRenderDistance.Value:F0}m");
+                    BotRenderDistance.Value = GUILayout.HorizontalSlider(BotRenderDistance.Value, 50f, 1000f);
+                    break;
 
-            GUILayout.Space(10);
-            GUILayout.Label("<b>--- PERFORMANCE ---</b>");
-            PerformanceMode.Value = GUILayout.Toggle(PerformanceMode.Value, $" Enable Bot Distance Culling [{ToggleCullingHotkey.Value}]");
-            GUILayout.Label($"Bot Render Distance: {BotRenderDistance.Value:F0}m");
-            BotRenderDistance.Value = GUILayout.HorizontalSlider(BotRenderDistance.Value, 50f, 1000f);
+                case 1:
+                    GUILayout.Space(20);
+                    GUILayout.Label("<b>--- PLAYER ESP ---</b>");
+                    EspEnabled.Value = GUILayout.Toggle(EspEnabled.Value, $" Enable Player ESP (Text) [{ToggleEspHotkey.Value}]");
+                    GUILayout.Label($"ESP Transparency: {EspTextAlpha.Value:F2}");
+                    EspTextAlpha.Value = GUILayout.HorizontalSlider(EspTextAlpha.Value, 0.1f, 1.0f);
+                    GUILayout.Label($"ESP Font Size: {EspFontSize.Value}");
+                    EspFontSize.Value = (int)GUILayout.HorizontalSlider(EspFontSize.Value, 1f, 24f);
+                    GUILayout.Label($"Max Distance: {EspMaxDistance.Value:F0}m");
+                    EspMaxDistance.Value = GUILayout.HorizontalSlider(EspMaxDistance.Value, 50f, 1000f);
+                    GUILayout.Label($"Update Rate (FPS): {1f / EspUpdateInterval.Value:F0}");
+                    float pFps = GUILayout.HorizontalSlider(1f / EspUpdateInterval.Value, 1f, 60f);
+                    EspUpdateInterval.Value = 1f / pFps;
 
-            GUILayout.Space(10);
-            GUILayout.Label("<b>--- PLAYER ESP ---</b>");
-            EspEnabled.Value = GUILayout.Toggle(EspEnabled.Value, $" Enable Player ESP (Text) [{ToggleEspHotkey.Value}]");
-            GUILayout.Label($"Max Distance: {EspMaxDistance.Value:F0}m");
-            EspMaxDistance.Value = GUILayout.HorizontalSlider(EspMaxDistance.Value, 50f, 1000f);
-            GUILayout.Label($"Update Rate (FPS): {1f / EspUpdateInterval.Value:F0}");
-            float pFps = GUILayout.HorizontalSlider(1f / EspUpdateInterval.Value, 1f, 60f);
-            EspUpdateInterval.Value = 1f / pFps;
+                    GUILayout.Label("<b>--- CHAMS SETTINGS ---</b>");
+                    ChamsEnabled.Value = GUILayout.Toggle(ChamsEnabled.Value, $" Enable Player Chams (Models) [{ToggleChamsHotkey.Value}]");
+                    GUILayout.BeginHorizontal();
+                    GUILayout.EndHorizontal();
 
-            GUILayout.Label("<b>--- CHAMS SETTINGS ---</b>");
-            ChamsEnabled.Value = GUILayout.Toggle(ChamsEnabled.Value, $" Enable Player Chams (Models) [{ToggleChamsHotkey.Value}]");
-            GUILayout.BeginHorizontal();
-            GUILayout.EndHorizontal();
+                    GUILayout.Space(5);
+                    GUILayout.Label("<b>--- COLORS & TRANSPARENCY (RGB) ---</b>");
+                    ColorBear.Value = DrawColorPicker("BEAR", ColorBear.Value);
+                    ColorUsec.Value = DrawColorPicker("USEC", ColorUsec.Value);
+                    ColorSavage.Value = DrawColorPicker("SAVAGE / SCAV", ColorSavage.Value);
+                    ColorBoss.Value = DrawColorPicker("BOSS", ColorBoss.Value);
+                    break;
 
-            GUILayout.Space(5);
-            GUILayout.Label("<b>--- COLORS & TRANSPARENCY (RGB) ---</b>");
-            ColorBear.Value = DrawColorPicker("BEAR", ColorBear.Value);
-            ColorUsec.Value = DrawColorPicker("USEC", ColorUsec.Value);
-            ColorSavage.Value = DrawColorPicker("SAVAGE / SCAV", ColorSavage.Value);
-            ColorBoss.Value = DrawColorPicker("BOSS", ColorBoss.Value);
+                case 2:
+                    GUILayout.Space(20);
+                    GUILayout.Label("<b>--- ITEM & CONTAINER ESP ---</b>");
+                    ItemEspEnabled.Value = GUILayout.Toggle(ItemEspEnabled.Value, $" Enable Loose Item ESP [{ToggleItemEspHotkey.Value}]");
+                    ContainerEspEnabled.Value = GUILayout.Toggle(ContainerEspEnabled.Value, $" Enable Container Item ESP [{ToggleContainerEspHotkey.Value}]");
+                    GUILayout.Label("Filter (Name or ID, comma separated):");
+                    ItemEspFilter.Value = GUILayout.TextField(ItemEspFilter.Value);
+                    GUILayout.Label($"Max Distance: {ItemEspMaxDistance.Value:F0}m");
+                    ItemEspMaxDistance.Value = GUILayout.HorizontalSlider(ItemEspMaxDistance.Value, 5f, 500f);
+                    GUILayout.Label($"Update Rate (FPS): {1f / ItemEspUpdateInterval.Value:F0}");
+                    float iFps = GUILayout.HorizontalSlider(1f / ItemEspUpdateInterval.Value, 1f, 60f);
+                    ItemEspUpdateInterval.Value = 1f / iFps;
+                    GUILayout.Label($"Item Font Size: {ItemEspFontSize.Value}");
+                    ItemEspFontSize.Value = (int)GUILayout.HorizontalSlider(ItemEspFontSize.Value, 6f, 20f);
+                    break;
 
+                case 3:
+                    GUILayout.Space(20);
+                    GUILayout.Label("<b>--- OP FEATURES ---</b>");
+                    ThermalVisionEnabled.Value = GUILayout.Toggle(ThermalVisionEnabled.Value, " Thermal Vision");
+                    NightVisionEnabled.Value = GUILayout.Toggle(NightVisionEnabled.Value, " Night Vision");
+                    if (GUILayout.Button("Teleport Filtered Items to Me")) TeleportFilteredItemsToMe();
+                    break;
+                case 4:
+                    GUILayout.Space(20);
+                    SpeedhackEnabled.Value = GUILayout.Toggle(SpeedhackEnabled.Value, " Speedhack");
+                    if (SpeedhackEnabled.Value)
+                    {
+                        GUILayout.Label($"Speed: {SpeedMultiplier.Value:F1}x");
+                        SpeedMultiplier.Value = GUILayout.HorizontalSlider(SpeedMultiplier.Value, 1f, 10f);
+                    }
+                    GUILayout.Space(10);
+                    GUILayout.Label("<b>--- TELEPORT & SPAWN ---</b>");
+                    if (GUILayout.Button("Teleport All Enemies to Me")) TeleportEnemiesToMe();
+                    GUILayout.Label("<b>--- FUN ---</b>");
 
-            GUILayout.Space(10);
-            GUILayout.Label("<b>--- ITEM & CONTAINER ESP ---</b>");
-            ItemEspEnabled.Value = GUILayout.Toggle(ItemEspEnabled.Value, $" Enable Loose Item ESP [{ToggleItemEspHotkey.Value}]");
-            ContainerEspEnabled.Value = GUILayout.Toggle(ContainerEspEnabled.Value, $" Enable Container Item ESP [{ToggleContainerEspHotkey.Value}]");
-            GUILayout.Label("Filter (Name or ID, comma separated):");
-            ItemEspFilter.Value = GUILayout.TextField(ItemEspFilter.Value);
-            GUILayout.Label($"Max Distance: {ItemEspMaxDistance.Value:F0}m");
-            ItemEspMaxDistance.Value = GUILayout.HorizontalSlider(ItemEspMaxDistance.Value, 5f, 500f);
-            GUILayout.Label($"Update Rate (FPS): {1f / ItemEspUpdateInterval.Value:F0}");
-            float iFps = GUILayout.HorizontalSlider(1f / ItemEspUpdateInterval.Value, 1f, 60f);
-            ItemEspUpdateInterval.Value = 1f / iFps;
-
-            GUILayout.Space(10);
-            GUILayout.Label("<b>--- HOTKEYS (Customizable in .cfg) ---</b>");
-            GUILayout.Label($"Menu: {ToggleUiHotkey.Value}");
-            GUILayout.Label($"Status Window: {ToggleStatusHotkey.Value}");
-            GUILayout.Label($"GodMode: {ToggleGodModeHotkey.Value}");
-            GUILayout.Label($"Stamina: {ToggleStaminaHotkey.Value}");
-            GUILayout.Label($"Weight: {ToggleWeightHotkey.Value}");
-            GUILayout.Label($"Player ESP: {ToggleEspHotkey.Value}");
-            GUILayout.Label($"Item ESP: {ToggleItemEspHotkey.Value}");
-            GUILayout.Label($"Container ESP: {ToggleContainerEspHotkey.Value}");
-            GUILayout.Label($"Culling: {ToggleCullingHotkey.Value}");
-            GUILayout.Label($"Unlock Doors: {ToggleUnlockDoorsHotkey.Value}");
-
+                    BigHeadModeEnabled.Value = GUILayout.Toggle(BigHeadModeEnabled.Value, " Big Head Mode");
+                    if (BigHeadModeEnabled.Value)
+                    {
+                        GUILayout.Label($"Head Size: {HeadSizeMultiplier.Value:F1}x");
+                        HeadSizeMultiplier.Value = GUILayout.HorizontalSlider(HeadSizeMultiplier.Value, 1f, 5f);
+                    }
+                    break;
+                case 5:
+                    GUILayout.Space(20);
+                    GUILayout.Label("<b>--- HOTKEYS (Customizable in .cfg) ---</b>");
+                    GUILayout.Label($"Menu: {ToggleUiHotkey.Value}");
+                    GUILayout.Label($"Status Window: {ToggleStatusHotkey.Value}");
+                    GUILayout.Label($"GodMode: {ToggleGodModeHotkey.Value}");
+                    GUILayout.Label($"Stamina: {ToggleStaminaHotkey.Value}");
+                    GUILayout.Label($"Weight: {ToggleWeightHotkey.Value}");
+                    GUILayout.Label($"Player ESP: {ToggleEspHotkey.Value}");
+                    GUILayout.Label($"Item ESP: {ToggleItemEspHotkey.Value}");
+                    GUILayout.Label($"Container ESP: {ToggleContainerEspHotkey.Value}");
+                    GUILayout.Label($"Culling: {ToggleCullingHotkey.Value}");
+                    GUILayout.Label($"Unlock Doors: {ToggleUnlockDoorsHotkey.Value}");
+                    break;
+            }
+         
             GUILayout.EndScrollView();
             GUILayout.EndArea();
 
@@ -738,6 +886,41 @@ namespace InfiniteHealthToggle
             return ColorSavage.Value;
         }
 
+        private void TeleportEnemiesToMe()
+        {
+            if (_gameWorld == null || _localPlayer == null) return;
+
+            Vector3 targetPos = _localPlayer.Transform.position + (_localPlayer.Transform.forward * 3f);
+
+            foreach (var player in _gameWorld.RegisteredPlayers)
+            {
+                if (player == null || player.IsYourPlayer || !player.HealthController.IsAlive) continue;
+
+                player.Transform.position = targetPos;
+            }
+        }
+
+        private void TeleportFilteredItemsToMe()
+        {
+            if (_gameWorld == null || _localPlayer == null) return;
+
+            Vector3 targetPos = _localPlayer.Transform.position + Vector3.up * 0.5f;
+            string[] filters = ItemEspFilter.Value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                                                  .Select(f => f.Trim().ToLower()).ToArray();
+
+            var lootItems = _gameWorld.LootItems;
+            for (int i = 0; i < lootItems.Count; i++)
+            {
+                var loot = lootItems.GetByIndex(i);
+                if (loot == null || loot.Item == null) continue;
+
+                string name = loot.Item.ShortName.Localized().ToLower();
+
+                if (filters.Length > 0 && !filters.Any(f => name.Contains(f))) continue;
+
+                loot.transform.position = targetPos;
+            }
+        }
 
         private class EspTarget
         {
