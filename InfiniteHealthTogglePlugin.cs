@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using UnityEngine;
+using EFT.Quests;
 
 namespace InfiniteHealthToggle
 {
@@ -41,7 +42,7 @@ namespace InfiniteHealthToggle
         internal static ConfigEntry<KeyboardShortcut> ToggleContainerEspHotkey;
         internal static ConfigEntry<KeyboardShortcut> ToggleCullingHotkey;
         internal static ConfigEntry<KeyboardShortcut> ToggleUnlockDoorsHotkey;
-
+        internal static ConfigEntry<KeyboardShortcut> ToggleQuestEspHotkey;
         // --- Player ESP Settings ---
         internal static ConfigEntry<bool> EspEnabled;
         internal static ConfigEntry<float> EspUpdateInterval;
@@ -80,13 +81,34 @@ namespace InfiniteHealthToggle
         private bool _itemEspStyleInitialized;
         internal static ConfigEntry<int> ItemEspFontSize;
 
+        // --- Quest ESP Settings ---
+        internal static ConfigEntry<bool> QuestEspEnabled;
+        internal static ConfigEntry<float> QuestEspMaxDistance;
+        internal static ConfigEntry<Color> ColorQuestItem;
+        internal static ConfigEntry<Color> ColorQuestZone;
+        private List<QuestEspTarget> _questEspTargets = new List<QuestEspTarget>();
+        private float _nextQuestEspUpdate;
+        internal static ConfigEntry<int> QuestEspFps;
+
+        // --- FOV by Weapon Category Settings ---
+        internal static ConfigEntry<bool> WeaponFovEnabled;
+        internal static ConfigEntry<float> FovPistol;
+        internal static ConfigEntry<float> FovSMG;
+        internal static ConfigEntry<float> FovAssaultRifle;
+        internal static ConfigEntry<float> FovShotgun;
+        internal static ConfigEntry<float> FovSniper;
+        internal static ConfigEntry<float> FovMelee;
+        internal static ConfigEntry<float> FovDefault;
+        private float _originalFov = 75f;
+        private bool _fovInitialized = false;
+
         // --- Performance Settings ---
         internal static ConfigEntry<bool> PerformanceMode;
         internal static ConfigEntry<float> BotRenderDistance;
 
         // --- GUI Settings ---
         private int _selectedTab = 0;
-        private readonly string[] _tabNames = { "Geral", "ESP Players", "ESP Itens", "Visual", "Troll", "Configs" };
+        private readonly string[] _tabNames = { "Geral", "ESP Players", "ESP Itens", "ESP Quest/Wish", "Visual", "Troll", "Configs" };
         private Vector2 _itemFilterScroll = Vector2.zero;
 
         private Harmony _harmony;
@@ -156,6 +178,7 @@ namespace InfiniteHealthToggle
             ToggleContainerEspHotkey = Config.Bind("Hotkeys", "09. Toggle Container ESP", new KeyboardShortcut(KeyCode.Keypad7), hotkeyDesc);
             ToggleCullingHotkey = Config.Bind("Hotkeys", "10. Toggle Culling", new KeyboardShortcut(KeyCode.Keypad8), hotkeyDesc);
             ToggleUnlockDoorsHotkey = Config.Bind("Hotkeys", "11. Unlock All Doors", new KeyboardShortcut(KeyCode.Keypad9), hotkeyDesc);
+            ToggleQuestEspHotkey = Config.Bind("Hotkeys", "14. Toggle Quest ESP", new KeyboardShortcut(KeyCode.Keypad3), hotkeyDesc);
 
             // New features for 2.0.0
             SpeedhackEnabled = Config.Bind("Movement", "Speedhack", false, "Move faster.");
@@ -164,7 +187,7 @@ namespace InfiniteHealthToggle
             NightVisionEnabled = Config.Bind("Visuals", "Night Vision", false, "Toggle Night Vision.");
             BigHeadModeEnabled = Config.Bind("Visuals", "Big Head Mode", false, "Enlarge enemy heads.");
             HeadSizeMultiplier = Config.Bind("Visuals", "Head Size", 3f, "How big the heads should be.");
-          
+
             // Player ESP Binds
             EspEnabled = Config.Bind("ESP Players", "Enabled", false, "Show players/bots.");
             EspTextAlpha = Config.Bind("ESP Players", "Text Alpha", 1.0f, "Text Alpha.");
@@ -191,6 +214,22 @@ namespace InfiniteHealthToggle
             ColorContainer = Config.Bind("ESP Containers", "Color", new Color(1f, 0.5f, 0f), "Color for container items.");
             ItemEspFontSize = Config.Bind("ESP Items", "Font Size", 10, "Itens Text Size.");
 
+            // Quest ESP Binds
+            QuestEspEnabled = Config.Bind("ESP Quests", "Enabled", false, "Show quest items and objectives.");
+            QuestEspMaxDistance = Config.Bind("ESP Quests", "Max Distance", 200f, "Max distance for quest ESP.");
+            ColorQuestItem = Config.Bind("ESP Quests", "Quest Item Color", new Color(1f, 0.84f, 0f), "Color for quest items (gold).");
+            ColorQuestZone = Config.Bind("ESP Quests", "Quest Zone Color", new Color(0f, 1f, 0.5f), "Color for quest zones (green).");
+            QuestEspFps = Config.Bind("ESP Quests", "Update FPS", 15, new ConfigDescription("Update rate in frames per second. Higher is smoother but uses more resources.", new AcceptableValueRange<int>(1, 60)));
+
+            // FOV by Weapon Category Binds
+            WeaponFovEnabled = Config.Bind("FOV Settings", "Enable Weapon FOV", false, "Automatically adjust FOV based on weapon type.");
+            FovDefault = Config.Bind("FOV Settings", "Default FOV", 75f, new ConfigDescription("FOV when no weapon equipped.", new AcceptableValueRange<float>(50f, 120f)));
+            FovPistol = Config.Bind("FOV Settings", "Pistol FOV", 65f, new ConfigDescription("FOV for pistols.", new AcceptableValueRange<float>(50f, 120f)));
+            FovSMG = Config.Bind("FOV Settings", "SMG FOV", 70f, new ConfigDescription("FOV for SMGs.", new AcceptableValueRange<float>(50f, 120f)));
+            FovAssaultRifle = Config.Bind("FOV Settings", "Assault Rifle FOV", 75f, new ConfigDescription("FOV for assault rifles.", new AcceptableValueRange<float>(50f, 120f)));
+            FovShotgun = Config.Bind("FOV Settings", "Shotgun FOV", 70f, new ConfigDescription("FOV for shotguns.", new AcceptableValueRange<float>(50f, 120f)));
+            FovSniper = Config.Bind("FOV Settings", "Sniper FOV", 80f, new ConfigDescription("FOV for sniper/marksman rifles.", new AcceptableValueRange<float>(50f, 120f)));
+            FovMelee = Config.Bind("FOV Settings", "Melee FOV", 60f, new ConfigDescription("FOV for melee weapons.", new AcceptableValueRange<float>(50f, 120f)));
 
             // Performance Binds
             PerformanceMode = Config.Bind("Performance", "Enable Distance Culling", true, "Only render bots within distance.");
@@ -226,6 +265,7 @@ namespace InfiniteHealthToggle
             if (ToggleContainerEspHotkey.Value.IsDown()) ContainerEspEnabled.Value = !ContainerEspEnabled.Value;
             if (ToggleCullingHotkey.Value.IsDown()) PerformanceMode.Value = !PerformanceMode.Value;
             if (ToggleUnlockDoorsHotkey.Value.IsDown()) UnlockAllDoors();
+            if (ToggleQuestEspHotkey.Value.IsDown()) QuestEspEnabled.Value = !QuestEspEnabled.Value;
 
             if (Time.time >= _nextLocalRefresh)
             {
@@ -248,11 +288,18 @@ namespace InfiniteHealthToggle
 
             //Chams with 60fps
             UpdateChams();
-            
+
             if ((ItemEspEnabled.Value || ContainerEspEnabled.Value) && _localPlayer != null && Time.time >= _nextItemEspUpdate)
             {
                 UpdateItemAndContainerEsp();
                 _nextItemEspUpdate = Time.time + ItemEspUpdateInterval.Value;
+            }
+
+            // Quest ESP Update
+            if (QuestEspEnabled.Value && _localPlayer != null && Time.time >= _nextQuestEspUpdate)
+            {
+                UpdateQuestEsp();
+                _nextQuestEspUpdate = Time.time + (1f / QuestEspFps.Value);
             }
 
             if (SpeedhackEnabled.Value && _localPlayer != null)
@@ -288,6 +335,27 @@ namespace InfiniteHealthToggle
                     }
                 }
 
+                // Weapon Category FOV
+                if (WeaponFovEnabled.Value && _mainCamera != null)
+                {
+                    if (!_fovInitialized)
+                    {
+                        _originalFov = _mainCamera.fieldOfView;
+                        _fovInitialized = true;
+                    }
+
+                    float targetFov = GetFovForCurrentWeapon();
+                    if (Mathf.Abs(_mainCamera.fieldOfView - targetFov) > 0.1f)
+                    {
+                        _mainCamera.fieldOfView = Mathf.Lerp(_mainCamera.fieldOfView, targetFov, Time.deltaTime * 10f);
+                    }
+                }
+                else if (_fovInitialized && !WeaponFovEnabled.Value)
+                {
+                    _mainCamera.fieldOfView = _originalFov;
+                    _fovInitialized = false;
+                }
+
                 if (_gameWorld == null) return;
                 foreach (var player in _gameWorld.RegisteredPlayers)
                 {
@@ -295,7 +363,7 @@ namespace InfiniteHealthToggle
                     var head = player.PlayerBones.Head.Original;
                     if (head != null)
                     {
-                       
+
                         if (BigHeadModeEnabled.Value && player.HealthController.IsAlive)
                             head.localScale = new Vector3(HeadSizeMultiplier.Value, HeadSizeMultiplier.Value, HeadSizeMultiplier.Value);
                         else
@@ -381,7 +449,7 @@ namespace InfiniteHealthToggle
                 _itemEspStyleInitialized = true;
             }
 
-            
+
             _espLabelStyle.fontSize = EspFontSize.Value;
             _itemEspLabelStyle.fontSize = ItemEspFontSize.Value;
 
@@ -391,7 +459,7 @@ namespace InfiniteHealthToggle
                 if (ItemEspEnabled.Value || ContainerEspEnabled.Value) RenderItemEsp();
                 if (StatusWindowEnabled.Value) DrawStatusWindow();
             }
-
+            if (QuestEspEnabled.Value) RenderQuestEsp();
             if (_showUi)
                 _windowRect = GUI.Window(WindowId, _windowRect, DrawWindow, "Advanced SPT Mod Menu");
         }
@@ -422,6 +490,7 @@ namespace InfiniteHealthToggle
             status += $"Stamina: <color={(InfiniteStaminaEnabled.Value ? "green" : "red")}>{(InfiniteStaminaEnabled.Value ? "ON" : "OFF")}</color>\n";
             status += $"Weight: <color={(NoWeightEnabled.Value ? "green" : "red")}>{(NoWeightEnabled.Value ? "ON" : "OFF")}</color>\n";
             status += $"ESP: <color={(EspEnabled.Value ? "green" : "red")}>{(EspEnabled.Value ? "ON" : "OFF")}</color>\n";
+            status += $"Quest ESP: <color={(QuestEspEnabled.Value ? "green" : "red")}>{(QuestEspEnabled.Value ? "ON" : "OFF")}</color>\n";
 
             if (ShowWeaponInfo.Value && _localPlayer != null)
             {
@@ -442,7 +511,7 @@ namespace InfiniteHealthToggle
                 catch { }
             }
 
-            float height = ShowWeaponInfo.Value ? 200 : 140;
+            float height = ShowWeaponInfo.Value ? 260 : 200;
             _statusRect.height = height;
             GUI.Box(_statusRect, status, _statusStyle);
         }
@@ -500,7 +569,7 @@ namespace InfiniteHealthToggle
             {
                 if (player is Player playerClass)
                 {
-                  
+
                     float dist = Vector3.Distance(_mainCamera.transform.position, playerClass.Transform.position);
 
                     bool shouldChams = ChamsEnabled.Value &&
@@ -515,7 +584,7 @@ namespace InfiniteHealthToggle
                     }
                     else
                     {
-                        
+
                         ResetChams(playerClass);
                     }
                 }
@@ -599,6 +668,40 @@ namespace InfiniteHealthToggle
             }
         }
 
+        private float GetFovForCurrentWeapon()
+        {
+            if (_localPlayer == null || _localPlayer.HandsController == null)
+                return FovDefault.Value;
+
+            var item = _localPlayer.HandsController.Item;
+            if (item == null)
+                return FovDefault.Value;
+
+            if (item is Weapon weapon)
+            {
+                var weaponTemplate = weapon.Template;
+                if (weaponTemplate == null)
+                    return FovDefault.Value;
+
+                var weaponType = weaponTemplate.weapClass;
+
+                switch (weaponType?.ToLower())
+                {
+                    case "pistol": return FovPistol.Value;
+                    case "smg": return FovSMG.Value;
+                    case "assaultrifle":
+                    case "assaultcarbine": return FovAssaultRifle.Value;
+                    case "shotgun": return FovShotgun.Value;
+                    case "marksmanrifle":
+                    case "sniperrifle": return FovSniper.Value;
+                    case "machinegun": return FovAssaultRifle.Value;
+                    default: return FovDefault.Value;
+                }
+            }
+
+            return FovDefault.Value;
+        }
+
         private Color GetColorForSide(string side)
         {
             if (side.Contains("Bear")) return ColorBear.Value;
@@ -673,6 +776,26 @@ namespace InfiniteHealthToggle
                     PerformanceMode.Value = GUILayout.Toggle(PerformanceMode.Value, $" Enable Bot Distance Culling [{ToggleCullingHotkey.Value}]");
                     GUILayout.Label($"Bot Render Distance: {BotRenderDistance.Value:F0}m");
                     BotRenderDistance.Value = GUILayout.HorizontalSlider(BotRenderDistance.Value, 50f, 1000f);
+
+                    GUILayout.Space(10);
+                    GUILayout.Label("<b>--- FOV BY WEAPON ---</b>");
+                    WeaponFovEnabled.Value = GUILayout.Toggle(WeaponFovEnabled.Value, " Enable Weapon Category FOV");
+                    if (WeaponFovEnabled.Value)
+                    {
+                        GUILayout.Label($"Default FOV: {FovDefault.Value:F0}");
+                        FovDefault.Value = GUILayout.HorizontalSlider(FovDefault.Value, 50f, 120f);
+                        GUILayout.Label($"Pistol FOV: {FovPistol.Value:F0}");
+                        FovPistol.Value = GUILayout.HorizontalSlider(FovPistol.Value, 50f, 120f);
+                        GUILayout.Label($"SMG FOV: {FovSMG.Value:F0}");
+                        FovSMG.Value = GUILayout.HorizontalSlider(FovSMG.Value, 50f, 120f);
+                        GUILayout.Label($"Assault Rifle FOV: {FovAssaultRifle.Value:F0}");
+                        FovAssaultRifle.Value = GUILayout.HorizontalSlider(FovAssaultRifle.Value, 50f, 120f);
+                        GUILayout.Label($"Shotgun FOV: {FovShotgun.Value:F0}");
+                        FovShotgun.Value = GUILayout.HorizontalSlider(FovShotgun.Value, 50f, 120f);
+                        GUILayout.Label($"Sniper FOV: {FovSniper.Value:F0}");
+                        FovSniper.Value = GUILayout.HorizontalSlider(FovSniper.Value, 50f, 120f);
+                    }
+
                     break;
 
                 case 1:
@@ -724,15 +847,26 @@ namespace InfiniteHealthToggle
                     GUILayout.Label($"Item Font Size: {ItemEspFontSize.Value}");
                     ItemEspFontSize.Value = (int)GUILayout.HorizontalSlider(ItemEspFontSize.Value, 6f, 20f);
                     break;
+                case 3: // ESP Quest
+                    GUILayout.Space(20);
+                    GUILayout.Label("<b>--- QUEST ESP ---</b>");
+                    QuestEspEnabled.Value = GUILayout.Toggle(QuestEspEnabled.Value, $" Enable Quest Item ESP [{ToggleQuestEspHotkey.Value}]");
+                    GUILayout.Label($"Quest ESP Distance: {QuestEspMaxDistance.Value:F0}m");
+                    QuestEspMaxDistance.Value = GUILayout.HorizontalSlider(QuestEspMaxDistance.Value, 10f, 500f);
+                    ColorQuestItem.Value = DrawColorPicker("Quest Items", ColorQuestItem.Value);
+                    GUILayout.Label($"Update FPS: {QuestEspFps.Value}");
+                    QuestEspFps.Value = (int)GUILayout.HorizontalSlider(QuestEspFps.Value, 1f, 60f);
+                    GUILayout.Space(10);
 
-                case 3:
+                    break;
+                case 4:
                     GUILayout.Space(20);
                     GUILayout.Label("<b>--- OP FEATURES ---</b>");
                     ThermalVisionEnabled.Value = GUILayout.Toggle(ThermalVisionEnabled.Value, " Thermal Vision");
                     NightVisionEnabled.Value = GUILayout.Toggle(NightVisionEnabled.Value, " Night Vision");
                     if (GUILayout.Button("Teleport Filtered Items to Me")) TeleportFilteredItemsToMe();
                     break;
-                case 4:
+                case 5:
                     GUILayout.Space(20);
                     SpeedhackEnabled.Value = GUILayout.Toggle(SpeedhackEnabled.Value, " Speedhack");
                     if (SpeedhackEnabled.Value)
@@ -752,7 +886,7 @@ namespace InfiniteHealthToggle
                         HeadSizeMultiplier.Value = GUILayout.HorizontalSlider(HeadSizeMultiplier.Value, 1f, 5f);
                     }
                     break;
-                case 5:
+                case 6:
                     GUILayout.Space(20);
                     GUILayout.Label("<b>--- HOTKEYS (Customizable in .cfg) ---</b>");
                     GUILayout.Label($"Menu: {ToggleUiHotkey.Value}");
@@ -767,7 +901,7 @@ namespace InfiniteHealthToggle
                     GUILayout.Label($"Unlock Doors: {ToggleUnlockDoorsHotkey.Value}");
                     break;
             }
-         
+
             GUILayout.EndScrollView();
             GUILayout.EndArea();
 
@@ -861,7 +995,7 @@ namespace InfiniteHealthToggle
                     renderer.material.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
                     renderer.material.SetInt("_ZWrite", 0);
                 }
-                
+
                 renderer.material.SetColor("_Color", color);
             }
         }
@@ -910,7 +1044,6 @@ namespace InfiniteHealthToggle
         {
             if (player.Side == EPlayerSide.Savage)
             {
-                // Verifica se é um Boss ou seguidor
                 var role = player.Profile.Info.Settings.Role;
                 if (role != WildSpawnType.assault && role != WildSpawnType.marksman)
                 {
@@ -918,7 +1051,7 @@ namespace InfiniteHealthToggle
                 }
                 return "SCAV";
             }
-            return player.Side.ToString().ToUpper(); // Retorna BEAR ou USEC
+            return player.Side.ToString().ToUpper();
         }
 
 
@@ -957,7 +1090,230 @@ namespace InfiniteHealthToggle
                 loot.transform.position = targetPos;
             }
         }
+        private void UpdateQuestEsp()
+        {
+            _questEspTargets.Clear();
+            if (_gameWorld == null || _mainCamera == null || _localPlayer == null) return;
 
+            try
+            {
+                var profile = _localPlayer.Profile;
+                if (profile == null) return;
+
+                var questsData = profile.QuestsData;
+                if (questsData == null) return;
+
+                HashSet<string> questItemIds = new HashSet<string>();
+
+                int activeQuestCount = 0;
+
+                foreach (var quest in questsData)
+                {
+                    if (quest == null) continue;
+                    bool isStarted = quest.Status == EFT.Quests.EQuestStatus.Started;
+                    bool isReadyToFinish = quest.Status == EFT.Quests.EQuestStatus.AvailableForFinish;
+
+                    if (!isStarted && !isReadyToFinish) continue;
+
+                    activeQuestCount++;
+
+                    var template = quest.Template;
+                    if (template == null) continue;
+
+                    if (template.Conditions != null)
+                    {
+                        foreach (var conditionGroup in template.Conditions)
+                        {
+                            if (conditionGroup.Value == null) continue;
+                            foreach (var condition in conditionGroup.Value)
+                            {
+                                var targetItems = GetConditionTargetItems(condition);
+                                foreach (var itemId in targetItems)
+                                {
+                                    questItemIds.Add(itemId);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (questItemIds.Count == 0) return;
+
+                var lootItems = _gameWorld.LootItems;
+                if (lootItems != null)
+                {
+                    for (int i = 0; i < lootItems.Count; i++)
+                    {
+                        var loot = lootItems.GetByIndex(i);
+                        if (loot == null || loot.Item == null) continue;
+
+                        float dist = Vector3.Distance(_localPlayer.Transform.position, loot.transform.position);
+                        if (dist > QuestEspMaxDistance.Value) continue;
+
+                        bool isQuestItem = questItemIds.Contains(loot.Item.TemplateId);
+
+                        if (!isQuestItem) continue;
+
+                        Vector3 screenPos = _mainCamera.WorldToScreenPoint(loot.transform.position);
+                        if (screenPos.z > 0)
+                        {
+                            _questEspTargets.Add(new QuestEspTarget
+                            {
+                                ScreenPosition = new Vector2(screenPos.x, Screen.height - screenPos.y),
+                                Distance = dist,
+                                Name = "[QUEST] " + loot.Item.ShortName.Localized(),
+                                Color = ColorQuestItem.Value,
+                                IsZone = false
+                            });
+                        }
+                    }
+                }
+
+                if (_cachedContainers != null)
+                {
+                    foreach (var container in _cachedContainers)
+                    {
+                        if (container == null || container.ItemOwner == null || container.ItemOwner.RootItem == null) continue;
+
+                        float dist = Vector3.Distance(_localPlayer.Transform.position, container.transform.position);
+                        if (dist > QuestEspMaxDistance.Value) continue;
+
+                        var items = container.ItemOwner.RootItem.GetAllItems();
+                        foreach (var item in items)
+                        {
+                            if (item == container.ItemOwner.RootItem) continue;
+
+                            bool isQuestItem = questItemIds.Contains(item.TemplateId);
+                            if (!isQuestItem) continue;
+
+                            Vector3 screenPos = _mainCamera.WorldToScreenPoint(container.transform.position);
+                            if (screenPos.z > 0)
+                            {
+                                _questEspTargets.Add(new QuestEspTarget
+                                {
+                                    ScreenPosition = new Vector2(screenPos.x, Screen.height - screenPos.y),
+                                    Distance = dist,
+                                    Name = "[QUEST-C] " + item.ShortName.Localized(),
+                                    Color = ColorQuestItem.Value,
+                                    IsZone = false
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"Quest ESP Error: {ex.Message}");
+            }
+        }
+
+        private List<string> GetConditionTargetItems(EFT.Quests.Condition condition)
+        {
+            var items = new List<string>();
+            try
+            {
+                var conditionType = condition.GetType();
+
+                string[] possibleNames = { "target", "Target", "_target", "targets", "Targets", "_targets" };
+
+                foreach (var name in possibleNames)
+                {
+                    var prop = conditionType.GetProperty(name,
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic);
+
+                    if (prop != null)
+                    {
+                        var value = prop.GetValue(condition);
+                        if (TryExtractStrings(value, items))
+                            return items;
+                    }
+
+                    var field = conditionType.GetField(name,
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic);
+
+                    if (field != null)
+                    {
+                        var value = field.GetValue(condition);
+                        if (TryExtractStrings(value, items))
+                            return items;
+                    }
+                }
+
+                foreach (var prop in conditionType.GetProperties(
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic))
+                {
+                    try
+                    {
+                        var value = prop.GetValue(condition);
+                        if (value is string[] strArray && strArray.Length > 0)
+                        {
+                            if (strArray[0].Length == 24)
+                            {
+                                items.AddRange(strArray);
+                                return items;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+            }
+            return items;
+        }
+
+        private bool TryExtractStrings(object value, List<string> items)
+        {
+            if (value == null) return false;
+
+            if (value is string[] strArray)
+            {
+                items.AddRange(strArray);
+                return items.Count > 0;
+            }
+
+            if (value is IEnumerable<string> strEnumerable)
+            {
+                items.AddRange(strEnumerable);
+                return items.Count > 0;
+            }
+
+            if (value is System.Collections.IEnumerable enumerable)
+            {
+                foreach (var item in enumerable)
+                {
+                    if (item is string str)
+                    {
+                        items.Add(str);
+                    }
+                }
+                return items.Count > 0;
+            }
+
+            if (value is string singleStr && !string.IsNullOrEmpty(singleStr))
+            {
+                items.Add(singleStr);
+                return true;
+            }
+
+            return false;
+        }
+        private void RenderQuestEsp()
+        {
+            foreach (var target in _questEspTargets)
+            {
+                string text = $"{target.Name}\n{target.Distance:F1}m";
+                DrawTextWithShadowItens(target.ScreenPosition, text, target.Color, _itemEspLabelStyle);
+            }
+        }
         private class EspTarget
         {
             public Vector2 ScreenPosition;
@@ -973,6 +1329,15 @@ namespace InfiniteHealthToggle
             public float Distance;
             public string Name;
             public Color Color;
+        }
+
+        private class QuestEspTarget
+        {
+            public Vector2 ScreenPosition;
+            public float Distance;
+            public string Name;
+            public Color Color;
+            public bool IsZone;
         }
     }
 }
